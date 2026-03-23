@@ -695,14 +695,18 @@ class App:
             messagebox.showerror("Ошибка", str(e))
 
     def _auto_fit_diameter(self):
-        """Process current image, measure avg colony area, set min/max ±20%."""
+        """Process with wide-open filters to find ALL objects, then fit ±20%."""
         if not self.current_path:
             messagebox.showwarning("Внимание", "Выберите изображение.")
             return
         try:
-            self._set_status("Анализ размеров колоний...")
+            self._set_status("Анализ размеров колоний (широкий проход)...")
             self.root.update_idletasks()
-            result = self._process_image(self.current_path, self._get_params())
+            # First pass: very loose filters to capture everything
+            params = self._get_params()
+            params['min_diam_mm'] = 0.05
+            params['max_diam_mm'] = 30.0
+            result = self._process_image(self.current_path, params)
             avg_area_px = result.get('avg_colony_area', 0)
             if avg_area_px <= 0:
                 self._set_status("Не удалось определить размер колоний")
