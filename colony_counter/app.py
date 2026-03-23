@@ -193,7 +193,7 @@ class App:
         # Body — resizable 3-pane layout
         paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
                                bg=T.BORDER, sashwidth=5, sashrelief=tk.FLAT,
-                               opaqueresize=True)
+                               opaqueresize=False)
         paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         left = tk.Frame(paned, bg=T.BG1, highlightthickness=1, highlightbackground=T.BORDER)
         self._build_left(left)
@@ -263,7 +263,23 @@ class App:
         cf.pack(fill=tk.BOTH, expand=True)
         self.canvas_orig = tk.Canvas(cf, bg=T.CANVAS_BG, highlightthickness=0, cursor='crosshair')
         self.canvas_proc = tk.Canvas(cf, bg=T.CANVAS_BG, highlightthickness=0, cursor='tcross')
-        self.canvas_compare = tk.Canvas(cf, bg=T.CANVAS_BG, highlightthickness=0, cursor='sb_h_double_arrow')
+        # Compare tab — two-image side-by-side
+        self._compare_frame = tk.Frame(cf, bg=T.CANVAS_BG)
+        self._compare_sel = tk.Frame(self._compare_frame, bg=T.BG1)
+        self._compare_sel.pack(fill=tk.X, padx=4, pady=4)
+        tk.Label(self._compare_sel, text="Левое:", bg=T.BG1, fg=T.FG3, font=T.FONT_XS).pack(side=tk.LEFT, padx=(0, 4))
+        self._cmp_var_l = tk.StringVar()
+        self._cmp_menu_l = tk.OptionMenu(self._compare_sel, self._cmp_var_l, "")
+        self._cmp_menu_l.config(bg=T.BG2, fg=T.FG, font=T.FONT_XS, highlightthickness=0)
+        self._cmp_menu_l.pack(side=tk.LEFT, padx=(0, 12))
+        tk.Label(self._compare_sel, text="Правое:", bg=T.BG1, fg=T.FG3, font=T.FONT_XS).pack(side=tk.LEFT, padx=(0, 4))
+        self._cmp_var_r = tk.StringVar()
+        self._cmp_menu_r = tk.OptionMenu(self._compare_sel, self._cmp_var_r, "")
+        self._cmp_menu_r.config(bg=T.BG2, fg=T.FG, font=T.FONT_XS, highlightthickness=0)
+        self._cmp_menu_r.pack(side=tk.LEFT)
+        DarkButton(self._compare_sel, "Показать", self._draw_comparison, 'primary', small=True).pack(side=tk.LEFT, padx=8)
+        self.canvas_compare = tk.Canvas(self._compare_frame, bg=T.CANVAS_BG, highlightthickness=0)
+        self.canvas_compare.pack(fill=tk.BOTH, expand=True)
         self._switch_tab('result')
 
         self.canvas_orig.bind("<Configure>", lambda e: self._redraw(self.canvas_orig, self._pil_orig))
@@ -407,7 +423,7 @@ class App:
     def _switch_tab(self, tid):
         for t, w in self._tabs.items():
             w.config(bg=T.ACCENT_DIM if t == tid else T.BG, fg=T.ACCENT if t == tid else T.FG4)
-        for c in (self.canvas_orig, self.canvas_proc, self.canvas_compare):
+        for c in (self.canvas_orig, self.canvas_proc, self._compare_frame):
             c.pack_forget()
         if tid == 'original':
             self.canvas_orig.pack(fill=tk.BOTH, expand=True)
@@ -417,7 +433,8 @@ class App:
             self.canvas_proc.pack(fill=tk.BOTH, expand=True)
             self.root.after(30, self._refresh_proc_canvas)
         else:
-            self.canvas_compare.pack(fill=tk.BOTH, expand=True)
+            self._compare_frame.pack(fill=tk.BOTH, expand=True)
+            self._update_compare_menus()
             self.root.after(30, self._draw_comparison)
 
     # ═══════════ FILE OPS ════════════════════════════════════════════════
@@ -721,50 +738,78 @@ class App:
         canvas.create_image(round(ox + sx0 * ds), round(oy + sy0 * ds), anchor=tk.NW, image=photo)
         canvas.image = photo
 
+    def _update_compare_menus(self):
+        """Rebuild dropdown menus with processed image names."""
+        processed = [p for p in self.image_paths if self.image_data.get(p)]
+        names = [self.display_names.get(p, Path(p).name) for p in processed]
+        if not names:
+            return
+        for menu_w, var in [(self._cmp_menu_l, self._cmp_var_l),
+                            (self._cmp_menu_r, self._cmp_var_r)]:
+            m = menu_w['menu']
+            m.delete(0, tk.END)
+            for nm in names:
+                m.add_command(label=nm, command=lambda v=var, n=nm: v.set(n))
+        if not self._cmp_var_l.get() or self._cmp_var_l.get() not in names:
+            self._cmp_var_l.set(names[0])
+        if not self._cmp_var_r.get() or self._cmp_var_r.get() not in names:
+            self._cmp_var_r.set(names[min(1, len(names) - 1)])
+
     def _draw_comparison(self):
-        if not self.current_path or not self._pil_orig:
-            return
-        result = self.image_data.get(self.current_path)
-        if not result:
-            return
+        """Draw two processed images side by side."""
         canvas = self.canvas_compare
         canvas.update_idletasks()
-        cw = max(canvas.winfo_width(), 100)
-        ch = max(canvas.winfo_height(), 100)
-        ann = self._get_annotated(self.current_path)
-        if ann is None:
-            return
-        pp = Image.fromarray(cv2.cvtColor(ann, cv2.COLOR_BGR2RGB))
-        iw, ih = self._pil_orig.size
-        fit = min(cw / iw, ch / ih)
-        nw, nh = int(iw * fit), int(ih * fit)
-        orig_r = self._pil_orig.resize((nw, nh), Image.BILINEAR)
-        proc_r = pp.resize((nw, nh), Image.BILINEAR)
-        comp = orig_r.copy()
-        sx = int(nw * self._compare_pos)
-        if sx < nw:
-            comp.paste(proc_r.crop((sx, 0, nw, nh)), (sx, 0))
-        offx, offy = (cw - nw) // 2, (ch - nh) // 2
-        photo = ImageTk.PhotoImage(comp)
+        cw = max(canvas.winfo_width(), 200)
+        ch = max(canvas.winfo_height(), 200)
+
+        name_l = self._cmp_var_l.get()
+        name_r = self._cmp_var_r.get()
+        path_l = next((p for p in self.image_paths
+                       if self.display_names.get(p, Path(p).name) == name_l
+                       and self.image_data.get(p)), None)
+        path_r = next((p for p in self.image_paths
+                       if self.display_names.get(p, Path(p).name) == name_r
+                       and self.image_data.get(p)), None)
+
         canvas.delete("all")
-        canvas.create_image(offx, offy, anchor=tk.NW, image=photo)
-        lx = offx + sx
-        canvas.create_line(lx, offy, lx, offy + nh, fill=T.YELLOW, width=2, dash=(6, 3))
-        canvas.create_text(offx + 8, offy + 8, text="Оригинал", anchor=tk.NW, fill=T.YELLOW, font=T.FONT_SM)
-        canvas.create_text(offx + nw - 8, offy + 8, text="Результат", anchor=tk.NE, fill=T.YELLOW, font=T.FONT_SM)
-        canvas.image = photo
+        if not path_l or not path_r:
+            canvas.create_text(cw // 2, ch // 2, text="Обработайте 2+ изображения",
+                               fill=T.FG4, font=T.FONT_SM)
+            return
 
-    def _on_compare_click(self, e):
-        cw = self.canvas_compare.winfo_width()
-        if cw > 0:
-            self._compare_pos = e.x / cw
-        self._draw_comparison()
+        gap = 8
+        half_w = (cw - gap) // 2
 
-    def _on_compare_drag(self, e):
-        cw = self.canvas_compare.winfo_width()
-        if cw > 0:
-            self._compare_pos = max(0, min(1, e.x / cw))
-        self._draw_comparison()
+        for side, path, x_off in [("left", path_l, 0), ("right", path_r, half_w + gap)]:
+            ann = self._get_annotated(path)
+            if ann is None:
+                continue
+            pil = Image.fromarray(cv2.cvtColor(ann, cv2.COLOR_BGR2RGB))
+            iw, ih = pil.size
+            fit = min(half_w / iw, ch / ih)
+            nw, nh = max(1, int(iw * fit)), max(1, int(ih * fit))
+            resized = pil.resize((nw, nh), Image.BILINEAR)
+            photo = ImageTk.PhotoImage(resized)
+            ox = x_off + (half_w - nw) // 2
+            oy = (ch - nh) // 2
+            canvas.create_image(ox, oy, anchor=tk.NW, image=photo)
+            # Store reference to prevent GC
+            if side == "left":
+                canvas._photo_l = photo
+            else:
+                canvas._photo_r = photo
+            # Label with count
+            aa, mn, _ = self._grand_total(path)
+            nm = self.display_names.get(path, Path(path).name)
+            if len(nm) > 25:
+                nm = nm[:22] + "..."
+            label = f"{nm}  |  {aa + mn} колоний"
+            canvas.create_text(x_off + half_w // 2, 12, text=label,
+                               fill=T.ACCENT, font=T.FONT_XS)
+
+        # Divider line
+        canvas.create_line(half_w + gap // 2, 0, half_w + gap // 2, ch,
+                           fill=T.BORDER, width=2)
 
     # ═══════════ MANUAL EDITING ══════════════════════════════════════════
 
