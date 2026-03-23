@@ -134,6 +134,14 @@ class App:
         sel = self.listbox.curselection()
         if sel:
             sel_idx = sel[0]
+        # Save panel sizes before destroying
+        try:
+            sashes = [self._paned.sash_coord(i) for i in range(2)]
+            total_w = self._paned.winfo_width()
+            self._sash_left_w = sashes[0][0]
+            self._sash_right_w = total_w - sashes[1][0]
+        except Exception:
+            pass
         for w in self.root.winfo_children():
             w.destroy()
         self._build_ui()
@@ -191,19 +199,22 @@ class App:
         self._prog_bar.place(x=0, y=0, height=3, relwidth=0)
 
         # Body — resizable 3-pane layout
-        paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
-                               bg=T.BORDER, sashwidth=5, sashrelief=tk.FLAT,
-                               opaqueresize=False)
-        paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        left = tk.Frame(paned, bg=T.BG1, highlightthickness=1, highlightbackground=T.BORDER)
+        self._paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
+                                     bg=T.BORDER, sashwidth=5, sashrelief=tk.FLAT,
+                                     opaqueresize=False)
+        self._paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # Use saved sash positions if available, otherwise defaults
+        left_w = getattr(self, '_sash_left_w', 220)
+        right_w = getattr(self, '_sash_right_w', 300)
+        left = tk.Frame(self._paned, bg=T.BG1, highlightthickness=1, highlightbackground=T.BORDER)
         self._build_left(left)
-        center = tk.Frame(paned, bg=T.BG)
+        center = tk.Frame(self._paned, bg=T.BG)
         self._build_center(center)
-        right = tk.Frame(paned, bg=T.BG1, highlightthickness=1, highlightbackground=T.BORDER)
+        right = tk.Frame(self._paned, bg=T.BG1, highlightthickness=1, highlightbackground=T.BORDER)
         self._build_right(right)
-        paned.add(left, minsize=160, width=220)
-        paned.add(center, minsize=400)
-        paned.add(right, minsize=200, width=300)
+        self._paned.add(left, minsize=160, width=left_w)
+        self._paned.add(center, minsize=400)
+        self._paned.add(right, minsize=200, width=right_w)
 
         # Status
         tk.Frame(self.root, bg=T.BORDER, height=1).pack(fill=tk.X)
