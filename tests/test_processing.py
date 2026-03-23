@@ -85,20 +85,28 @@ class TestFillContourWithCircles:
         assert ImageProcessor.fill_contour_with_circles(contours[0], 0, 5) == []
 
 
-class TestWatershed:
+class TestSplitCluster:
     def test_single_blob(self):
-        img = np.zeros((200, 200), dtype=np.uint8)
-        cv2.circle(img, (100, 100), 20, 255, -1)
-        contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        n = ImageProcessor.watershed_per_component(contours[0], 1200.0, 200, 200)
-        assert n == 1
+        enhanced = np.zeros((200, 200), dtype=np.uint8)
+        binary = np.zeros((200, 200), dtype=np.uint8)
+        cv2.circle(enhanced, (100, 100), 20, 200, -1)
+        cv2.circle(binary, (100, 100), 20, 255, -1)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        n, centers = ImageProcessor.split_cluster(contours[0], enhanced, binary, 1200.0, 200, 200)
+        assert n >= 1
+        assert len(centers) >= 1
 
     def test_two_blobs_merged(self):
-        img = np.zeros((200, 200), dtype=np.uint8)
-        cv2.circle(img, (80, 100), 25, 255, -1)
-        cv2.circle(img, (130, 100), 25, 255, -1)
-        # Bridge them
-        cv2.rectangle(img, (80, 90), (130, 110), 255, -1)
-        contours, _ = cv2.findContours(img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        n = ImageProcessor.watershed_per_component(contours[0], 1800.0, 200, 200)
+        enhanced = np.zeros((200, 200), dtype=np.uint8)
+        binary = np.zeros((200, 200), dtype=np.uint8)
+        # Two bright circles bridged together
+        cv2.circle(enhanced, (80, 100), 25, 200, -1)
+        cv2.circle(enhanced, (130, 100), 25, 200, -1)
+        cv2.rectangle(enhanced, (80, 90), (130, 110), 150, -1)
+        cv2.circle(binary, (80, 100), 25, 255, -1)
+        cv2.circle(binary, (130, 100), 25, 255, -1)
+        cv2.rectangle(binary, (80, 90), (130, 110), 255, -1)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        n, centers = ImageProcessor.split_cluster(contours[0], enhanced, binary, 1800.0, 200, 200)
         assert n >= 2
+        assert len(centers) >= 2

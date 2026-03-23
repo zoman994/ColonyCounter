@@ -18,6 +18,49 @@ except ImportError:
     HAS_SKIMAGE = False
 
 
+# ── Helpers for split_cluster ────────────────────────────────────────────
+
+def _fallback_grid(cnt, n, col_radius, x, y, bw, bh, roi_mask):
+    """Hex-grid fallback when image-based splitting fails."""
+    if n <= 0:
+        return []
+    if n == 1:
+        M = cv2.moments(cnt)
+        if M['m00'] > 0:
+            return [(int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))]
+        return [(x + bw // 2, y + bh // 2)]
+    r = max(2, col_radius)
+    dy, dx = max(1, int(r * 1.732)), max(1, int(r * 2.0))
+    cands = []
+    for row_i, yi in enumerate(range(r, bh, dy)):
+        ox = r if row_i % 2 else 0
+        for xi in range(ox, bw, dx):
+            if yi < roi_mask.shape[0] and xi < roi_mask.shape[1] and roi_mask[yi, xi] > 0:
+                cands.append((xi + x, yi + y))
+    if not cands:
+        return [(x + bw // 2, y + bh // 2)]
+    if len(cands) <= n:
+        return cands
+    step = (len(cands) - 1) / max(1, n - 1)
+    return [cands[min(int(i * step), len(cands) - 1)] for i in range(n)]
+
+
+def _aggressive_peak_search(dist, roi_mask, est_r):
+    """Retry peak search with softer parameters."""
+    blurred = cv2.GaussianBlur(dist, (0, 0), max(2, est_r * 0.5))
+    _, peak_mask = cv2.threshold(
+        blurred, max(0.5, float(blurred.max()) * 0.15), 255, cv2.THRESH_BINARY)
+    peak_mask = peak_mask.astype(np.uint8)
+    peak_mask = cv2.bitwise_and(peak_mask, peak_mask, mask=roi_mask)
+    n_labels, labels = cv2.connectedComponents(peak_mask)
+    peaks = []
+    for lbl in range(1, n_labels):
+        ys, xs = np.where(labels == lbl)
+        if len(xs) > 0:
+            peaks.append((int(np.mean(xs)), int(np.mean(ys))))
+    return peaks
+
+
 class ImageProcessor:
     """All image processing algorithms — zero tkinter dependency."""
 
@@ -92,7 +135,10 @@ class ImageProcessor:
             if aspect > C.LABEL_MIN_ASPECT and fill > C.LABEL_MIN_FILL:
                 cv2.fillConvexPoly(label_mask, np.intp(cv2.boxPoints(rect)), 255)
         if cv2.countNonZero(label_mask) > 0:
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (C.LABEL_DILATE_K, C.LABEL_DILATE_K))
+            # Adaptive dilate: proportional to dish size
+            dish_r_px = max(1, int(math.sqrt(cv2.countNonZero(dish_mask) / math.pi)))
+            dilate_k = max(C.LABEL_DILATE_K, int(dish_r_px * 0.05)) | 1
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_k, dilate_k))
             label_mask = cv2.dilate(label_mask, k, iterations=2)
         return label_mask
 
@@ -123,7 +169,9 @@ class ImageProcessor:
             if aspect > C.LABEL_LIGHT_MIN_ASPECT and fill > C.LABEL_LIGHT_MIN_FILL:
                 cv2.fillConvexPoly(label_mask, np.intp(cv2.boxPoints(rect)), 255)
         if cv2.countNonZero(label_mask) > 0:
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (C.LABEL_DILATE_K, C.LABEL_DILATE_K))
+            dish_r_px = max(1, int(math.sqrt(cv2.countNonZero(dish_mask) / math.pi)))
+            dilate_k = max(C.LABEL_DILATE_K, int(dish_r_px * 0.05)) | 1
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_k, dilate_k))
             label_mask = cv2.dilate(label_mask, k, iterations=2)
         return label_mask
 
@@ -152,33 +200,133 @@ class ImageProcessor:
         return float(np.median(pa))
 
     # ── Watershed ────────────────────────────────────────────────────────
+    # ── Cluster splitting (image-based) ─────────────────────────────────
     @staticmethod
-    def watershed_per_component(cnt, avg_area: float, h: int, w: int) -> int:
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.drawContours(mask, [cnt], -1, 255, -1)
-        dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-        if dist.max() < 2:
-            return 1
-        er = max(3, int(np.sqrt(avg_area / np.pi)))
-        md = max(3, int(er * C.WS_MIN_DIST_FACTOR))
-        ta = max(2.0, float(dist.max()) * C.WS_THRESH_FACTOR)
+    def split_cluster(cnt, enhanced, binary, avg_area: float, h: int, w: int
+                      ) -> tuple[int, list[tuple[int, int]]]:
+        """Split a cluster contour into individual colonies using the actual image.
+
+        Uses adaptive threshold + distance transform + watershed inside the
+        contour ROI, instead of blind hex-grid filling.
+        """
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if bw < 3 or bh < 3:
+            M = cv2.moments(cnt)
+            if M['m00'] > 0:
+                return 1, [(int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))]
+            return 1, [(x + bw // 2, y + bh // 2)]
+
+        # ROI mask
+        roi_mask = np.zeros((bh, bw), dtype=np.uint8)
+        shifted = cnt.copy()
+        shifted[:, :, 0] -= x
+        shifted[:, :, 1] -= y
+        cv2.drawContours(roi_mask, [shifted], -1, 255, -1)
+
+        # Extract ROI from enhanced image
+        roi_enh = cv2.bitwise_and(
+            enhanced[y:y + bh, x:x + bw], enhanced[y:y + bh, x:x + bw], mask=roi_mask)
+        roi_bin = cv2.bitwise_and(
+            binary[y:y + bh, x:x + bw], binary[y:y + bh, x:x + bw], mask=roi_mask)
+
+        est_r = max(3, int(math.sqrt(avg_area / math.pi)))
+        est_diam = est_r * 2
+
+        # Adaptive threshold — finds boundaries between touching colonies
+        block_size = max(7, (est_diam * 2 + 1) | 1)
+        local_thresh = cv2.adaptiveThreshold(
+            roi_enh, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, block_size, C.SPLIT_ADAPTIVE_C)
+        local_thresh = cv2.bitwise_and(local_thresh, local_thresh, mask=roi_mask)
+        k_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        local_thresh = cv2.morphologyEx(local_thresh, cv2.MORPH_OPEN, k_small)
+
+        # Distance transform
+        dist = cv2.distanceTransform(local_thresh, cv2.DIST_L2, 5)
+        if dist.max() < 1:
+            dist = cv2.distanceTransform(roi_bin, cv2.DIST_L2, 5)
+        if dist.max() < 1:
+            ae = max(1, round(cv2.contourArea(cnt) / max(avg_area, 1)))
+            return ae, _fallback_grid(cnt, ae, est_r, x, y, bw, bh, roi_mask)
+
+        # Find peaks (= colony centers)
+        min_dist = max(3, int(est_r * 0.6))
+        thresh_abs = max(1.5, float(dist.max()) * C.SPLIT_DIST_THRESH)
+
         if HAS_SKIMAGE:
-            coords = peak_local_max(dist, min_distance=md, threshold_abs=ta, labels=mask)
-            return max(1, len(coords))
-        # OpenCV fallback: distance threshold → connectedComponents
-        _, thresh_map = cv2.threshold(dist, ta, 255, cv2.THRESH_BINARY)
-        thresh_map = thresh_map.astype(np.uint8)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, md), max(3, md)))
-        thresh_map = cv2.erode(thresh_map, kernel, iterations=1)
-        n_labels, _ = cv2.connectedComponents(thresh_map)
-        return max(1, n_labels - 1)  # subtract background
+            coords = peak_local_max(dist, min_distance=min_dist,
+                                    threshold_abs=thresh_abs, labels=roi_mask)
+            if len(coords) == 0:
+                coords = peak_local_max(dist, min_distance=max(2, min_dist // 2),
+                                        threshold_abs=max(1.0, thresh_abs * 0.5),
+                                        labels=roi_mask)
+            peaks = [(int(c[1]), int(c[0])) for c in coords]
+        else:
+            # OpenCV fallback
+            _, peak_mask = cv2.threshold(dist, thresh_abs, 255, cv2.THRESH_BINARY)
+            peak_mask = peak_mask.astype(np.uint8)
+            peak_mask = cv2.bitwise_and(peak_mask, peak_mask, mask=roi_mask)
+            k_er = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (max(3, min_dist), max(3, min_dist)))
+            peak_mask = cv2.erode(peak_mask, k_er, iterations=1)
+            n_labels, labels = cv2.connectedComponents(peak_mask)
+            peaks = []
+            for lbl in range(1, n_labels):
+                ys, xs = np.where(labels == lbl)
+                if len(xs) > 0:
+                    peaks.append((int(np.mean(xs)), int(np.mean(ys))))
+
+        if len(peaks) < 2:
+            ae = max(1, round(cv2.contourArea(cnt) / max(avg_area, 1)))
+            if ae <= 1:
+                M = cv2.moments(cnt)
+                if M['m00'] > 0:
+                    return 1, [(int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))]
+                return 1, [(x + bw // 2, y + bh // 2)]
+            # Aggressive retry
+            peaks = _aggressive_peak_search(dist, roi_mask, est_r)
+            if len(peaks) < 2:
+                return ae, _fallback_grid(cnt, ae, est_r, x, y, bw, bh, roi_mask)
+
+        # Watershed from found peaks for precise segmentation
+        markers = np.zeros((bh, bw), dtype=np.int32)
+        for i, (px, py) in enumerate(peaks):
+            if 0 <= py < bh and 0 <= px < bw:
+                markers[py, px] = i + 1
+        k_mark = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        markers = cv2.dilate(markers.astype(np.uint8), k_mark).astype(np.int32)
+        n_marks, markers = cv2.connectedComponents((markers > 0).astype(np.uint8))
+        markers = markers.astype(np.int32)
+        markers_ws = markers.copy()
+        markers_ws[roi_mask == 0] = 0
+        roi_bgr = cv2.cvtColor(roi_enh, cv2.COLOR_GRAY2BGR)
+        cv2.watershed(roi_bgr, markers_ws)
+
+        # Extract centers of mass for each segment
+        centers = []
+        min_frag = avg_area * C.SPLIT_MIN_FRAGMENT
+        for lbl in range(1, n_marks):
+            seg_mask = (markers_ws == lbl).astype(np.uint8)
+            seg_area = cv2.countNonZero(seg_mask)
+            if seg_area < min_frag:
+                continue
+            M = cv2.moments(seg_mask)
+            if M['m00'] > 0:
+                centers.append((int(M['m10'] / M['m00']) + x,
+                                int(M['m01'] / M['m00']) + y))
+
+        if not centers:
+            centers = [(px + x, py + y) for px, py in peaks]
+
+        count = max(1, len(centers))
+        return count, centers[:count]
 
     # ── Contour features ─────────────────────────────────────────────────
     @staticmethod
     def contour_features(cnt):
         area = cv2.contourArea(cnt)
         per = cv2.arcLength(cnt, True)
-        circ = (4 * np.pi * area / (per * per)) if per > 0 else 0.0
+        circ = (4 * math.pi * area / (per * per)) if per > 0 else 0.0
         x, y, bw, bh = cv2.boundingRect(cnt)
         ar = bw / bh if bh > 0 else 1.0
         hull_a = cv2.contourArea(cv2.convexHull(cnt))
@@ -189,7 +337,7 @@ class ImageProcessor:
         return dict(area=area, circularity=circ, aspect_ratio=ar,
                     solidity=sol, cx=cx, cy=cy)
 
-    # ── Cluster grid fill ────────────────────────────────────────────────
+    # ── Legacy grid fill (fallback only) ─────────────────────────────────
     @staticmethod
     def fill_contour_with_circles(cnt, n, col_radius):
         if n <= 0:
@@ -200,24 +348,20 @@ class ImageProcessor:
             if M['m00'] > 0:
                 return [(int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))]
             return [(x + bw // 2, y + bh // 2)]
-        r = max(2, col_radius)
-        dy = max(1, int(r * 1.732))
-        dx = max(1, int(r * 2.0))
-        m = np.zeros((bh + 2, bw + 2), dtype=np.uint8)
+        roi_mask = np.zeros((bh + 2, bw + 2), dtype=np.uint8)
         sh = cnt.copy()
         sh[:, :, 0] -= x
         sh[:, :, 1] -= y
-        cv2.drawContours(m, [sh], -1, 255, -1)
+        cv2.drawContours(roi_mask, [sh], -1, 255, -1)
+        r = max(2, col_radius)
+        dy, dx = max(1, int(r * 1.732)), max(1, int(r * 2.0))
         cands = []
         for row, yi in enumerate(range(r, bh, dy)):
             ox = r if row % 2 else 0
             for xi in range(ox, bw, dx):
-                if yi < m.shape[0] and xi < m.shape[1] and m[yi, xi] > 0:
+                if yi < roi_mask.shape[0] and xi < roi_mask.shape[1] and roi_mask[yi, xi] > 0:
                     cands.append((xi + x, yi + y))
         if not cands:
-            M = cv2.moments(cnt)
-            if M['m00'] > 0:
-                return [(int(M['m10'] / M['m00']), int(M['m01'] / M['m00']))]
             return [(x + bw // 2, y + bh // 2)]
         if len(cands) <= n:
             return cands
@@ -323,7 +467,9 @@ class ImageProcessor:
                 continue
             raw.append(dict(contour=cnt, feat=feat))
 
-        all_areas = np.array([o['feat']['area'] for o in raw if o['feat']['area'] <= max_a], dtype=float)
+        # Filter both min and max to exclude noise and merged blobs
+        all_areas = np.array([o['feat']['area'] for o in raw
+                              if min_a <= o['feat']['area'] <= max_a], dtype=float)
         if len(all_areas) >= 3:
             avg_area = self.estimate_single_colony_area(all_areas)
         elif len(all_areas) > 0:
@@ -344,14 +490,12 @@ class ImageProcessor:
                 est = 1
                 wsc = [(feat['cx'], feat['cy'])]
             else:
-                ae = max(1, round(a / avg_area))
                 if uw:
-                    wc = self.watershed_per_component(cnt, avg_area, h, w)
-                    est = wc if (wc >= 2 and wc <= ae * C.WS_SANITY_HI
-                                 and wc >= ae * C.WS_SANITY_LO) else ae
+                    # Image-based splitting using adaptive threshold + watershed
+                    est, wsc = self.split_cluster(cnt, enhanced, binary, avg_area, h, w)
                 else:
-                    est = ae
-                wsc = self.fill_contour_with_circles(cnt, est, col_r)
+                    est = max(1, round(a / avg_area))
+                    wsc = self.fill_contour_with_circles(cnt, est, col_r)
             if not wsc:
                 wsc = [(feat['cx'], feat['cy'])]
             total += est

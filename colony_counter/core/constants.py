@@ -56,11 +56,16 @@ class C:
     LOG_HIST_MAX_BINS = 30
     LOG_HIST_MIN_BINS = 10
 
-    # Watershed
+    # Watershed (legacy, still used in split_cluster)
     WS_MIN_DIST_FACTOR = 0.5        # min_distance = radius × 0.5
     WS_THRESH_FACTOR = 0.2          # threshold_abs = dist.max() × 0.2
     WS_SANITY_LO = 0.5              # ws_count ≥ area_estimate × 0.5
     WS_SANITY_HI = 1.5              # ws_count ≤ area_estimate × 1.5
+
+    # Cluster splitting (new: image-based, replaces hex grid)
+    SPLIT_ADAPTIVE_C = 3             # Subtracted from adaptive threshold
+    SPLIT_MIN_FRAGMENT = 0.15        # Min fragment area as fraction of avg_area
+    SPLIT_DIST_THRESH = 0.25         # Distance transform threshold (fraction of max)
 
     # Adaptive learning (EMA)
     LEARN_ALPHA = 0.30               # EMA coefficient
