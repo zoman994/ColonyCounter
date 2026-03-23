@@ -129,3 +129,44 @@ class DarkSection(tk.Frame):
                  font=T.FONT_XS).pack(anchor=tk.W)
         self.body = tk.Frame(self, bg=T.BG1)
         self.body.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+
+class ToolTip:
+    """Delayed tooltip on hover for any widget."""
+
+    def __init__(self, widget, text: str, delay: int = 500):
+        self._widget = widget
+        self._text = text
+        self._delay = delay
+        self._tip = None
+        self._after_id = None
+        widget.bind('<Enter>', self._schedule, add='+')
+        widget.bind('<Leave>', self._cancel, add='+')
+        widget.bind('<Button>', self._cancel, add='+')
+
+    def _schedule(self, _e=None):
+        self._cancel()
+        self._after_id = self._widget.after(self._delay, self._show)
+
+    def _cancel(self, _e=None):
+        if self._after_id:
+            self._widget.after_cancel(self._after_id)
+            self._after_id = None
+        self._hide()
+
+    def _show(self):
+        if self._tip:
+            return
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(tw, text=self._text, bg='#1e1e2e', fg='#cdd6f4',
+                 font=('Consolas', 9), padx=8, pady=4,
+                 relief='solid', borderwidth=1).pack()
+
+    def _hide(self):
+        if self._tip:
+            self._tip.destroy()
+            self._tip = None

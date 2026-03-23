@@ -1,13 +1,28 @@
-build/
-dist/
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+
+# Build
+dist/
+build/
 *.spec
-*.pyc
-*.pyo
-*.zip
-*.exe
-*.xlsx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
 .mypy_cache/
 .pytest_cache/
-*.egg-info/
-Новая папка/
+
+# Project sessions
+*.colsession

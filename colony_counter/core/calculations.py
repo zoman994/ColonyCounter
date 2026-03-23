@@ -1,9 +1,16 @@
 """Pure computation helpers — zero tkinter dependency."""
+from __future__ import annotations
+
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 
-def grand_total(result, excluded_set, manual_marks_list):
+def grand_total(
+    result: dict | None,
+    excluded_set: set[tuple[int, int]],
+    manual_marks_list: list[tuple[int, int]],
+) -> tuple[int, int, int]:
     """Returns (auto_active, manual_count, excluded_count)."""
     if not result:
         return (0, 0, 0)
@@ -13,7 +20,7 @@ def grand_total(result, excluded_set, manual_marks_list):
     return (aa, len(manual_marks_list), len(excluded_set))
 
 
-def px_per_mm(result, dish_diameter_mm):
+def px_per_mm(result: dict | None, dish_diameter_mm: float) -> float | None:
     """Pixels per mm based on detected dish radius and user-set diameter."""
     if not result:
         return None
@@ -26,7 +33,7 @@ def px_per_mm(result, dish_diameter_mm):
     return None
 
 
-def calc_cfu_ml(colony_count, plating_volume_ml, dilution_factor):
+def calc_cfu_ml(colony_count: int, plating_volume_ml: float, dilution_factor: float) -> float | None:
     """Calculate CFU/ml.
     dilution_factor is the denominator: 1:100 → dilution_factor=100
     Formula: CFU/ml = count / (volume_ml * (1 / dilution_factor))
@@ -37,7 +44,7 @@ def calc_cfu_ml(colony_count, plating_volume_ml, dilution_factor):
     return None
 
 
-def classify_morphology(result):
+def classify_morphology(result: dict | None) -> dict[str, int]:
     """Classify colonies into size/shape categories."""
     if not result or not result.get('colonies'):
         return {}
@@ -52,8 +59,14 @@ def classify_morphology(result):
         irregular=sum(1 for c in circs if c <= 0.7))
 
 
-def make_annotated_image(result, excluded_set, marks_list, annotations_list,
-                         dish_overrides, clean_img):
+def make_annotated_image(
+    result: dict | None,
+    excluded_set: set[tuple[int, int]],
+    marks_list: list[tuple[int, int]],
+    annotations_list: list[str],
+    dish_overrides: list | None,
+    clean_img: npt.NDArray[np.uint8] | None,
+) -> npt.NDArray[np.uint8] | None:
     """Rebuild annotated image with manual edits — pure OpenCV, no tkinter."""
     if result is None or clean_img is None:
         return None
@@ -124,8 +137,12 @@ def make_annotated_image(result, excluded_set, marks_list, annotations_list,
     return base
 
 
-def format_result_row(path, result, display_name, auto_active, manual_n, excluded_n,
-                      ppm=None, cfu=None, dilution_group="", dilution_factor=1):
+def format_result_row(
+    path: str, result: dict, display_name: str,
+    auto_active: int, manual_n: int, excluded_n: int,
+    ppm: float | None = None, cfu: float | None = None,
+    dilution_group: str = "", dilution_factor: float = 1,
+) -> dict:
     """Standard data row for export (Excel/CSV/PDF)."""
     singles = result['colony_count'] - result['cluster_count']
     grand = auto_active + manual_n

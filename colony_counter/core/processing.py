@@ -1,6 +1,12 @@
 """Colony detection and image processing pipeline."""
+from __future__ import annotations
+
+import math
+from typing import Optional, Callable
+
 import cv2
 import numpy as np
+import numpy.typing as npt
 
 from colony_counter.core.constants import C
 from colony_counter.core.io_utils import cv_imread
@@ -147,7 +153,7 @@ class ImageProcessor:
 
     # ── Watershed ────────────────────────────────────────────────────────
     @staticmethod
-    def watershed_per_component(cnt, avg_area, h, w):
+    def watershed_per_component(cnt, avg_area: float, h: int, w: int) -> int:
         mask = np.zeros((h, w), dtype=np.uint8)
         cv2.drawContours(mask, [cnt], -1, 255, -1)
         dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
@@ -159,7 +165,13 @@ class ImageProcessor:
         if HAS_SKIMAGE:
             coords = peak_local_max(dist, min_distance=md, threshold_abs=ta, labels=mask)
             return max(1, len(coords))
-        return max(1, round(cv2.contourArea(cnt) / avg_area))
+        # OpenCV fallback: distance threshold → connectedComponents
+        _, thresh_map = cv2.threshold(dist, ta, 255, cv2.THRESH_BINARY)
+        thresh_map = thresh_map.astype(np.uint8)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, md), max(3, md)))
+        thresh_map = cv2.erode(thresh_map, kernel, iterations=1)
+        n_labels, _ = cv2.connectedComponents(thresh_map)
+        return max(1, n_labels - 1)  # subtract background
 
     # ── Contour features ─────────────────────────────────────────────────
     @staticmethod
@@ -228,7 +240,6 @@ class ImageProcessor:
 
     # ── Per-dish pipeline ────────────────────────────────────────────────
     def _process_single_dish(self, img, gray, cx, cy, r, params):
-        import math
         h, w = img.shape[:2]
         dish_mask = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(dish_mask, (cx, cy), max(1, int(r * C.DISH_MASK_RATIO)), 255, -1)
@@ -266,7 +277,7 @@ class ImageProcessor:
             wp = enhanced[work_mask > 0]
             if len(wp) > 0:
                 ov, _ = cv2.threshold(wp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                thresh_val = max(5, int(ov * 0.48))
+                thresh_val = max(5, int(ov * C.OTSU_SCALE))
             else:
                 thresh_val = int(params['threshold'])
         else:

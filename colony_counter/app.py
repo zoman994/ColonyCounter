@@ -22,7 +22,7 @@ from colony_counter.core import session as sess
 from colony_counter.core.io_utils import cv_imwrite
 from colony_counter.export import excel_export, csv_export, pdf_export, image_export
 from colony_counter.ui.theme import T, save_theme_pref, load_theme_pref
-from colony_counter.ui.widgets import DarkButton, DarkCheck, DarkSlider, DarkSection
+from colony_counter.ui.widgets import DarkButton, DarkCheck, DarkSlider, DarkSection, ToolTip
 from colony_counter.ui.logo import LOGO_LIGHT_B64, LOGO_DARK_B64
 
 try:
@@ -399,12 +399,22 @@ class App:
         sp.pack(fill=tk.X, pady=4)
         pr = tk.Frame(sp.body, bg=T.BG1)
         pr.pack(fill=tk.X)
-        for key, label in [('default', 'F1 Стд'), ('sensitive', 'F2 Чувст'), ('strict', 'F3 Строг'), ('large', 'F4 Крупн')]:
-            DarkButton(pr, label, lambda k=key: self._apply_preset(k), 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+        preset_tips = {
+            'default': 'Стандартные (0.3–3.0 мм, порог 25)',
+            'sensitive': 'Чувствительный (0.2–5.0 мм, порог 15) — мелкие колонии',
+            'strict': 'Строгий (0.5–2.0 мм, порог 40) — только явные',
+            'large': 'Крупные (0.8–10.0 мм, порог 30) — грибные колонии',
+        }
+        for key, label in [('default', 'F1 Стандарт'), ('sensitive', 'F2 Чувствит.'),
+                           ('strict', 'F3 Строгий'), ('large', 'F4 Крупные')]:
+            btn = DarkButton(pr, label, lambda k=key: self._apply_preset(k), 'ghost', small=True)
+            btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+            ToolTip(btn, preset_tips[key])
         # Buttons
         DarkButton(parent, "ОБРАБОТАТЬ ТЕКУЩЕЕ", self._process_current, 'primary').pack(fill=tk.X, pady=4)
         DarkButton(parent, "Авто-порог (Otsu)", self._auto_threshold, 'secondary', small=True).pack(fill=tk.X, pady=1)
         DarkButton(parent, "Аннотация", self._add_annotation, 'ghost', small=True).pack(fill=tk.X, pady=1)
+        DarkButton(parent, "Экспорт всех изобр.", self._export_all_images, 'secondary', small=True).pack(fill=tk.X, pady=1)
         if HAS_MPL:
             r = tk.Frame(parent, bg=T.BG1)
             r.pack(fill=tk.X, pady=1)
@@ -676,7 +686,7 @@ class App:
             norm = self.processor.normalize_background(gray, mask)
             enh = cv2.createCLAHE(clipLimit=C.CLAHE_CLIP, tileGridSize=C.CLAHE_TILE).apply(norm)
             ov, _ = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            s = max(5, int(ov * 0.48))
+            s = max(5, int(ov * C.OTSU_SCALE))
             self.p['threshold'].set(s)
             self._set_status(f"Otsu: {s}")
         except Exception as e:
@@ -1172,7 +1182,7 @@ class App:
                 f"  одиноч.:  {singles:>6}\n  кластер.: {result['cluster_count']:>6}\n"
                 f"  исключ.:  {en:>6}\nРучных:     {mn:>6}\n"
                 f"{'─' * 22}\nИТОГО:      {grand:>6}\n" + cfu_str
-                + (f"+скрытых:   {hid:>6}\n" if hid else "")
+                + (f"+скрытых: \u2248{hid:>5} (экстр.)\n" if hid else "")
                 + f"{'─' * 22}\nСр.площ.:   {area_str}\n"
                 + (f"Этикетка:   да\n" if result.get('has_label') else "")
                 + morph_str)
@@ -1322,10 +1332,6 @@ class App:
             initialfile=f"colonies_{datetime.date.today()}.pdf", filetypes=[("PDF", "*.pdf")])
         if sp:
             try:
-                results_dict = {r['path']: self.image_data.get(p)
-                                for p in self.image_paths
-                                for r in [calc.format_result_row(p, self.image_data[p], '', 0, 0, 0)]
-                                if self.image_data.get(p)}
                 pdf_export.export_pdf(sp, rows, self._get_annotated,
                                       {p: self.image_data[p] for p in self.image_paths if self.image_data.get(p)})
                 self._set_status(f"PDF: {sp}")
@@ -1345,6 +1351,21 @@ class App:
         if sp:
             image_export.export_image(sp, ci)
             self._set_status(f"Сохранено: {Path(sp).name}")
+
+    def _export_all_images(self):
+        processed = [p for p in self.image_paths if self.image_data.get(p)]
+        if not processed:
+            messagebox.showwarning("Нет данных", "Обработайте изображения.")
+            return
+        out_dir = filedialog.askdirectory(title="Папка для экспорта изображений")
+        if not out_dir:
+            return
+        try:
+            count = image_export.export_images_batch(
+                out_dir, processed, self._get_annotated, self.display_names)
+            self._set_status(f"Экспортировано {count} изображений в {out_dir}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
 
     # ═══════════ SESSION ═════════════════════════════════════════════════
 
