@@ -1,14 +1,33 @@
 """Entry point: python -m colony_counter"""
+import sys
+import ctypes
 import tkinter as tk
+
 from colony_counter.app import App
 
 
-def main():
-    root = tk.Tk()
+def _enable_dpi_awareness():
+    """Make Windows render the app at native resolution instead of upscaling."""
+    if sys.platform != 'win32':
+        return
     try:
-        root.tk.call('tk', 'scaling', 1.25)
+        # Windows 10 1703+ — Per-Monitor V2 (best quality)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
-        pass
+        try:
+            # Windows 8.1+ — System DPI aware
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            try:
+                # Windows Vista+ fallback
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
+
+def main():
+    _enable_dpi_awareness()
+    root = tk.Tk()
     App(root)
     root.mainloop()
 
