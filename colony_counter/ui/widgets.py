@@ -90,6 +90,7 @@ class DarkSlider(tk.Frame):
     def __init__(self, parent, label, variable, from_, to, resolution=1, **kw):
         super().__init__(parent, bg=T.BG1, **kw)
         self._var = variable
+        self._res = resolution
         tk.Label(self, text=label, bg=T.BG1, fg=T.FG3,
                  font=T.FONT_XS, anchor='w').pack(fill=tk.X)
         row = tk.Frame(self, bg=T.BG1)
@@ -108,7 +109,12 @@ class DarkSlider(tk.Frame):
         self._update_val()
 
     def _update_val(self, *_):
-        self._val_lbl.config(text=str(int(self._var.get())))
+        v = self._var.get()
+        # Show decimals for float values, integers for int values
+        if self._res < 1:
+            self._val_lbl.config(text=f"{v:.1f}")
+        else:
+            self._val_lbl.config(text=str(int(v)))
 
 
 class DarkSection(tk.Frame):

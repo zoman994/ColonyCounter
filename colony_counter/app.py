@@ -75,7 +75,8 @@ class App:
 
         # Parameters (tk vars)
         self.p = dict(
-            min_area=tk.IntVar(value=80), max_area=tk.IntVar(value=3000),
+            min_diam_mm=tk.DoubleVar(value=0.3),   # min colony diameter in mm
+            max_diam_mm=tk.DoubleVar(value=3.0),    # max single colony diameter in mm
             threshold=tk.IntVar(value=25),
             filter_bubbles=tk.BooleanVar(value=True),
             use_watershed=tk.BooleanVar(value=True),
@@ -314,8 +315,8 @@ class App:
     def _build_tab_detect(self, parent):
         s1 = DarkSection(parent, "Обнаружение")
         s1.pack(fill=tk.X, pady=4)
-        DarkSlider(s1.body, "Мин. площадь", self.p['min_area'], 10, 500, 10).pack(fill=tk.X, pady=2)
-        DarkSlider(s1.body, "Макс. площадь", self.p['max_area'], 100, 15000, 50).pack(fill=tk.X, pady=2)
+        DarkSlider(s1.body, "Мин. диаметр (мм)", self.p['min_diam_mm'], 0.1, 5.0, 0.1).pack(fill=tk.X, pady=2)
+        DarkSlider(s1.body, "Макс. диаметр (мм)", self.p['max_diam_mm'], 0.5, 20.0, 0.1).pack(fill=tk.X, pady=2)
         DarkSlider(s1.body, "Порог", self.p['threshold'], 5, 100, 1).pack(fill=tk.X, pady=2)
         s2 = DarkSection(parent, "Фильтры")
         s2.pack(fill=tk.X, pady=4)
@@ -351,7 +352,14 @@ class App:
         sf = DarkSection(parent, "CFU/мл")
         sf.pack(fill=tk.X, pady=4)
         DarkSlider(sf.body, "Объём посева (мл)", self.p['plating_volume_ml'], 0.01, 1.0, 0.01).pack(fill=tk.X, pady=2)
-        DarkSlider(sf.body, "Разведение (1:N)", self.p['dilution_factor'], 1, 1000000, 1).pack(fill=tk.X, pady=2)
+        # Dilution as text entry (1, 10, 100, 1000, etc.)
+        dr = tk.Frame(sf.body, bg=T.BG1)
+        dr.pack(fill=tk.X, pady=2)
+        tk.Label(dr, text="Разведение 1:", bg=T.BG1, fg=T.FG3, font=T.FONT_XS).pack(side=tk.LEFT)
+        tk.Entry(dr, textvariable=self.p['dilution_factor'], bg=T.BG2, fg=T.FG,
+                 font=T.FONT_SM, insertbackground=T.FG, highlightthickness=1,
+                 highlightbackground=T.BORDER, bd=0, width=10).pack(side=tk.LEFT, padx=4)
+        tk.Label(dr, text="(1=чистая)", bg=T.BG1, fg=T.FG4, font=T.FONT_XS).pack(side=tk.LEFT)
         sdg = DarkSection(parent, "Серия разведений")
         sdg.pack(fill=tk.X, pady=4)
         gr = tk.Frame(sdg.body, bg=T.BG1)
@@ -523,7 +531,20 @@ class App:
     # ═══════════ PROCESSING ══════════════════════════════════════════════
 
     def _get_params(self):
-        return {k: v.get() for k, v in self.p.items()}
+        import math
+        p = {k: v.get() for k, v in self.p.items()}
+        # Convert mm diameters to pixel areas using dish calibration.
+        # Estimate: standard 90mm dish ≈ 900px diameter on 2000px image → ~10 px/mm
+        # Actual scale computed inside processor after dish detection,
+        # but we provide a reasonable default here.
+        dish_mm = p.get('dish_diameter_mm', 90.0)
+        # Rough estimate: image max dim is 2000, dish takes ~88% → ~880px radius
+        est_px_per_mm = (2000 * 0.88) / max(dish_mm, 1)
+        min_r_px = p['min_diam_mm'] / 2.0 * est_px_per_mm
+        max_r_px = p['max_diam_mm'] / 2.0 * est_px_per_mm
+        p['min_area'] = max(1, int(math.pi * min_r_px * min_r_px))
+        p['max_area'] = max(p['min_area'] + 1, int(math.pi * max_r_px * max_r_px))
+        return p
 
     def _process_image(self, path, params, progress_cb=None):
         """Unified: handles TIFF frames, temp files, cleanup."""
@@ -1176,10 +1197,10 @@ class App:
 
     def _apply_preset(self, name):
         presets = {
-            'default': dict(min_area=80, max_area=3000, threshold=25),
-            'sensitive': dict(min_area=40, max_area=5000, threshold=15),
-            'strict': dict(min_area=120, max_area=2000, threshold=40),
-            'large': dict(min_area=200, max_area=10000, threshold=30),
+            'default': dict(min_diam_mm=0.3, max_diam_mm=3.0, threshold=25),
+            'sensitive': dict(min_diam_mm=0.2, max_diam_mm=5.0, threshold=15),
+            'strict': dict(min_diam_mm=0.5, max_diam_mm=2.0, threshold=40),
+            'large': dict(min_diam_mm=0.8, max_diam_mm=10.0, threshold=30),
         }
         p = presets.get(name)
         if p:

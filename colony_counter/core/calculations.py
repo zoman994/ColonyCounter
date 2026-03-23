@@ -27,9 +27,13 @@ def px_per_mm(result, dish_diameter_mm):
 
 
 def calc_cfu_ml(colony_count, plating_volume_ml, dilution_factor):
-    """Calculate CFU/ml from colony count, volume, and dilution."""
-    if plating_volume_ml > 0 and dilution_factor > 0:
-        return colony_count / (plating_volume_ml * (1.0 / dilution_factor))
+    """Calculate CFU/ml.
+    dilution_factor is the denominator: 1:100 → dilution_factor=100
+    Formula: CFU/ml = count / (volume_ml * (1 / dilution_factor))
+           = count * dilution_factor / volume_ml
+    """
+    if plating_volume_ml > 0 and dilution_factor >= 1:
+        return colony_count * dilution_factor / plating_volume_ml
     return None
 
 
