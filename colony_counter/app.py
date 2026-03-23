@@ -292,8 +292,6 @@ class App:
         self.canvas_proc.bind("<ButtonPress-2>", self._on_proc_pan_start)
         self.canvas_proc.bind("<B2-Motion>", self._on_proc_pan_move)
         self.canvas_proc.bind("<ButtonRelease-2>", lambda e: setattr(self, '_pan_drag', None))
-        self.canvas_compare.bind("<Button-1>", self._on_compare_click)
-        self.canvas_compare.bind("<B1-Motion>", self._on_compare_drag)
         self.canvas_compare.bind("<Configure>", lambda e: self._draw_comparison())
 
         tk.Label(parent, text="ЛКМ-метка  ПКМ-убрать  Колесо-зум  СКМ-пан  F1-F4 пресеты",
