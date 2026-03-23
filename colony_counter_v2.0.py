@@ -482,8 +482,8 @@ class ImageProcessor:
             if M['m00'] > 0: return [(int(M['m10']/M['m00']), int(M['m01']/M['m00']))]
             return [(x+bw//2, y+bh//2)]
         if len(cands) <= n: return cands
-        step = len(cands)/n
-        return [cands[int(i*step)] for i in range(n)]
+        step = (len(cands) - 1) / max(1, n - 1)
+        return [cands[min(int(i * step), len(cands) - 1)] for i in range(n)]
 
     @staticmethod
     def color_filter_mask(img_bgr, work_mask):
@@ -721,11 +721,14 @@ class App:
         self.processor = ImageProcessor()
         self.learner = LearningEngine()
         self._cache = LazyImageCache()
+        self._lock = threading.Lock()  # protects image_data, manual_marks, excluded_auto
         self.image_paths, self.image_data = [], {}
         self.current_path = None
         self._prev_path = None
         self._pil_orig = None
         self._pil_proc = None
+        self._proc_cache_key = None  # (path, marks_hash, excl_hash, ann_hash) for _make_proc cache
+        self._proc_cache_img = None
         self.manual_marks, self.excluded_auto = {}, {}
         self.display_names, self.dish_overrides = {}, {}
         self._proc_transform = None
@@ -734,11 +737,11 @@ class App:
         self._pan_drag = None
         self._processing = False
         self._compare_pos = 0.5
-        # Undo/redo stacks: list of (action_type, path, data_before)
         self._undo_stack = []
         self._redo_stack = []
-        # Calibration & CFU
-        self._annotations = {}  # path -> list of text annotations
+        self._annotations = {}
+        import atexit
+        atexit.register(self._cache.cleanup)
 
         self.p = dict(
             min_area=tk.IntVar(value=80), max_area=tk.IntVar(value=3000),
@@ -1185,7 +1188,8 @@ class App:
         added = 0
         for path in paths:
             try:
-                pil = Image.open(path); nf = getattr(pil, 'n_frames', 1)
+                with Image.open(path) as pil:
+                    nf = getattr(pil, 'n_frames', 1)
             except: nf = 1
             if nf > 1 and path.lower().endswith(('.tiff', '.tif')):
                 for fi in range(nf):
@@ -1205,9 +1209,26 @@ class App:
         if '::frame' not in vp: return None
         rp, fi = vp.rsplit('::frame', 1)
         try:
-            p = Image.open(rp); p.seek(int(fi))
-            return cv2.cvtColor(np.array(p.convert('RGB')), cv2.COLOR_RGB2BGR)
+            with Image.open(rp) as p:
+                p.seek(int(fi))
+                return cv2.cvtColor(np.array(p.convert('RGB')), cv2.COLOR_RGB2BGR)
         except: return None
+
+    def _process_image(self, path, params, progress_cb=None):
+        """Unified processing: handles TIFF frames, temp files, and cleanup."""
+        if '::frame' in path:
+            fi = self._load_tiff_frame(path)
+            if fi is None:
+                raise ValueError(f"Не удалось загрузить кадр: {path}")
+            tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            try:
+                cv_imwrite(tmp.name, fi)
+                return self.processor.process(tmp.name, params, progress_cb)
+            finally:
+                try: os.unlink(tmp.name)
+                except OSError: pass
+        else:
+            return self.processor.process(path, params, progress_cb)
 
     def _remove_image(self):
         sel = self.listbox.curselection()
@@ -1217,7 +1238,8 @@ class App:
         self._cache.remove(f"{path}_a"); self._cache.remove(f"{path}_c")
         self.listbox.delete(idx)
         if self.current_path == path:
-            self.current_path = None; self.canvas_orig.delete("all"); self.canvas_proc.delete("all")
+            self.current_path = None; self._pil_orig = None; self._pil_proc = None
+            self.canvas_orig.delete("all"); self.canvas_proc.delete("all")
         self._refresh_results()
 
     def _rename_image(self):
@@ -1279,30 +1301,27 @@ class App:
                     params = self._get_params()
                     ov = self.dish_overrides.get(path)
                     if ov: params['dish_overrides'] = ov
-                    def pcb(frac, msg, _i=i, _n=n):
+                    _path = path  # capture for closure
+                    def pcb(frac, msg, _i=i, _n=n, _p=_path):
                         overall = (_i+frac)/_n
-                        self.root.after(0, lambda v=overall, m=msg: (
+                        self.root.after(0, lambda v=overall, m=msg, pp=_p: (
                             self._prog_bar.place_configure(relwidth=v),
-                            self._set_status(f"[{_i+1}/{_n}] {Path(path.split('::')[0]).name}: {m}")))
-                    if '::frame' in path:
-                        fi = self._load_tiff_frame(path)
-                        if fi is None: continue
-                        tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                        cv_imwrite(tmp.name, fi); result = self.processor.process(tmp.name, params, pcb)
-                        os.unlink(tmp.name)
-                    else: result = self.processor.process(path, params, pcb)
+                            self._set_status(f"[{_i+1}/{_n}] {Path(pp.split('::')[0]).name}: {m}")))
+                    result = self._process_image(path, params, pcb)
                     self._cache.store(f"{path}_a", result['annotated'])
                     self._cache.store(f"{path}_c", result['img_clean'])
                     rl = {k: v for k, v in result.items() if k not in ('annotated', 'img_clean')}
                     rl['_cached'] = True
-                    self.root.after(0, lambda p=path, r=rl: self._on_done(p, r))
+                    with self._lock:
+                        self.root.after(0, lambda p=path, r=rl: self._on_done(p, r))
                 except Exception as exc:
                     self.root.after(0, lambda e=exc: self._set_status(f"Ошибка: {e}"))
             self.root.after(0, self._on_all_done)
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_done(self, path, result):
-        self.image_data[path] = result
+        with self._lock:
+            self.image_data[path] = result
         if self.current_path == path:
             self._refresh_stats(result)
             self._switch_tab('result')
@@ -1321,17 +1340,13 @@ class App:
             params = self._get_params()
             ov = self.dish_overrides.get(path)
             if ov: params['dish_overrides'] = ov
-            if '::frame' in path:
-                fi = self._load_tiff_frame(path)
-                if fi is None: return
-                tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                cv_imwrite(tmp.name, fi); result = self.processor.process(tmp.name, params)
-                os.unlink(tmp.name)
-            else: result = self.processor.process(path, params)
+            result = self._process_image(path, params)
             self._cache.store(f"{path}_a", result['annotated'])
             self._cache.store(f"{path}_c", result['img_clean'])
             rl = {k: v for k, v in result.items() if k not in ('annotated', 'img_clean')}
-            rl['_cached'] = True; self.image_data[path] = rl
+            rl['_cached'] = True
+            with self._lock:
+                self.image_data[path] = rl
             if self.current_path == path:
                 self._refresh_stats(rl); self.root.after(60, self._refresh_proc_canvas)
         except Exception as exc:
@@ -1341,7 +1356,10 @@ class App:
         if not self.current_path: return
         try:
             path = self.current_path
-            img = self._load_tiff_frame(path) if '::frame' in path else cv_imread(path)
+            if '::frame' in path:
+                img = self._load_tiff_frame(path)
+            else:
+                img = cv_imread(path)
             if img is None: return
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             cx, cy, r = self.processor.detect_dish(gray)
@@ -1389,7 +1407,7 @@ class App:
         if sx1 <= sx0 or sy1 <= sy0: canvas.delete("all"); return
         crop = pil.crop((sx0, sy0, sx1, sy1))
         ow, oh = max(1, round((sx1-sx0)*ds)), max(1, round((sy1-sy0)*ds))
-        resized = crop.resize((ow, oh), Image.LANCZOS)
+        resized = crop.resize((ow, oh), Image.BILINEAR)
         photo = ImageTk.PhotoImage(resized)
         canvas.delete("all")
         canvas.create_image(round(ox+sx0*ds), round(oy+sy0*ds), anchor=tk.NW, image=photo)
@@ -1555,8 +1573,11 @@ class App:
 
     def _apply_learned(self, silent=False):
         s = self.learner.suggestion
-        if s: self.p['threshold'].set(s)
-        if not silent: self._set_status(f"Порог = {s}")
+        if s is not None:
+            self.p['threshold'].set(s)
+            if not silent: self._set_status(f"Порог = {s}")
+        elif not silent:
+            self._set_status("Нет данных обучения")
 
     def _refresh_learn_label(self):
         s, n = self.learner.suggestion, self.learner.samples
@@ -2270,17 +2291,10 @@ class App:
             params = self._get_params()
             params['threshold'] = t
             try:
-                if '::frame' in path:
-                    fi = self._load_tiff_frame(path)
-                    if fi is None: continue
-                    tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-                    cv_imwrite(tmp.name, fi)
-                    r = self.processor.process(tmp.name, params)
-                    os.unlink(tmp.name)
-                else:
-                    r = self.processor.process(path, params)
+                r = self._process_image(path, params)
                 results.append((t, r['total'], r['colony_count'], r['cluster_count']))
-            except: pass
+            except Exception:
+                continue
         if not results: return
         win = tk.Toplevel(self.root); win.title("Воспроизводимость")
         win.geometry("700x400"); win.config(bg=T.BG)
