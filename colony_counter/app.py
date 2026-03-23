@@ -1,5 +1,6 @@
 """App controller — orchestrates UI, processing, and export."""
 import atexit
+import math
 import os
 import tempfile
 import threading
@@ -243,7 +244,7 @@ class App:
         bf.pack(fill=tk.X, padx=6, pady=2)
         DarkButton(bf, "+ Файлы", self._add_images, 'secondary', small=True).pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
         DarkButton(bf, "+ Папка", self._add_folder, 'secondary', small=True).pack(side=tk.LEFT, padx=(0, 2), fill=tk.X, expand=True)
-        DarkButton(bf, "- Удал.", self._remove_image, 'ghost', small=True).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        DarkButton(bf, "- Удалить", self._remove_image, 'ghost', small=True).pack(side=tk.LEFT, fill=tk.X, expand=True)
         tk.Frame(parent, bg=T.BORDER, height=1).pack(fill=tk.X, padx=6, pady=6)
         DarkButton(parent, "ОБРАБОТАТЬ ВСЕ", self._process_all, 'primary').pack(fill=tk.X, padx=6, pady=2)
         tk.Frame(parent, bg=T.BORDER, height=1).pack(fill=tk.X, padx=6, pady=6)
@@ -263,7 +264,7 @@ class App:
             self._tabs[tid] = b
         tb = tk.Frame(tab_bar, bg=T.BG)
         tb.pack(side=tk.RIGHT)
-        for txt, cmd in [("Зум x1", self._reset_zoom), ("Отмена", self._undo), ("Очист.", self._clear_manual), ("Восст.", self._restore_auto)]:
+        for txt, cmd in [("Зум x1", self._reset_zoom), ("Отмена", self._undo), ("Очистить", self._clear_manual), ("Восстановить", self._restore_auto)]:
             DarkButton(tb, txt, cmd, 'ghost', small=True).pack(side=tk.LEFT, padx=1)
         tk.Frame(tb, bg=T.BORDER, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=4, pady=2)
         self._dish_btn = DarkButton(tb, "Границы", self._toggle_dish_edit, 'ghost', small=True)
@@ -317,7 +318,7 @@ class App:
         tab_row.pack(fill=tk.X, padx=4, pady=(4, 0))
         self._rtabs = {}
         self._rtab_frames = {}
-        for tid, label in [('detect', 'Обнар.'), ('advanced', 'Доп.'), ('calib', 'Калибр.'), ('actions', 'Действ.')]:
+        for tid, label in [('detect', 'Обнаружение'), ('advanced', 'Дополнительно'), ('calib', 'Калибровка'), ('actions', 'Действия')]:
             f = tk.Frame(nb, bg=T.BG1)
             self._rtab_frames[tid] = f
             b = tk.Label(tab_row, text=label, bg=T.BG1, fg=T.FG4, font=T.FONT_XS, padx=8, pady=3, cursor='hand2')
@@ -340,9 +341,10 @@ class App:
     def _build_tab_detect(self, parent):
         s1 = DarkSection(parent, "Обнаружение")
         s1.pack(fill=tk.X, pady=4)
-        DarkSlider(s1.body, "Мин. диаметр (мм)", self.p['min_diam_mm'], 0.1, 5.0, 0.1).pack(fill=tk.X, pady=2)
-        DarkSlider(s1.body, "Макс. диаметр (мм)", self.p['max_diam_mm'], 0.5, 20.0, 0.1).pack(fill=tk.X, pady=2)
-        DarkSlider(s1.body, "Порог", self.p['threshold'], 5, 100, 1).pack(fill=tk.X, pady=2)
+        DarkSlider(s1.body, "Минимальный диаметр (мм)", self.p['min_diam_mm'], 0.1, 5.0, 0.1).pack(fill=tk.X, pady=2)
+        DarkSlider(s1.body, "Максимальный диаметр (мм)", self.p['max_diam_mm'], 0.5, 20.0, 0.1).pack(fill=tk.X, pady=2)
+        DarkSlider(s1.body, "Порог чувствительности", self.p['threshold'], 5, 100, 1).pack(fill=tk.X, pady=2)
+        DarkButton(s1.body, "Авто-подбор диаметра по колониям", self._auto_fit_diameter, 'secondary', small=True).pack(fill=tk.X, pady=2)
         s2 = DarkSection(parent, "Фильтры")
         s2.pack(fill=tk.X, pady=4)
         for txt, var in [("Пузыри воздуха", self.p['filter_bubbles']),
@@ -414,13 +416,13 @@ class App:
         DarkButton(parent, "ОБРАБОТАТЬ ТЕКУЩЕЕ", self._process_current, 'primary').pack(fill=tk.X, pady=4)
         DarkButton(parent, "Авто-порог (Otsu)", self._auto_threshold, 'secondary', small=True).pack(fill=tk.X, pady=1)
         DarkButton(parent, "Аннотация", self._add_annotation, 'ghost', small=True).pack(fill=tk.X, pady=1)
-        DarkButton(parent, "Экспорт всех изобр.", self._export_all_images, 'secondary', small=True).pack(fill=tk.X, pady=1)
+        DarkButton(parent, "Экспорт всех изображений", self._export_all_images, 'secondary', small=True).pack(fill=tk.X, pady=1)
         if HAS_MPL:
             r = tk.Frame(parent, bg=T.BG1)
             r.pack(fill=tk.X, pady=1)
-            DarkButton(r, "Стат.", self._show_statistics, 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 1))
-            DarkButton(r, "Heatmap", self._show_heatmap, 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
-            DarkButton(r, "Воспр.", self._show_reproducibility, 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(1, 0))
+            DarkButton(r, "Статистика", self._show_statistics, 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 1))
+            DarkButton(r, "Тепловая карта", self._show_heatmap, 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+            DarkButton(r, "Воспроизводимость", self._show_reproducibility, 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(1, 0))
         # Stats
         s5 = DarkSection(parent, "Статистика")
         s5.pack(fill=tk.X, pady=4)
@@ -689,6 +691,37 @@ class App:
             s = max(5, int(ov * C.OTSU_SCALE))
             self.p['threshold'].set(s)
             self._set_status(f"Otsu: {s}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
+
+    def _auto_fit_diameter(self):
+        """Process current image, measure avg colony area, set min/max ±20%."""
+        if not self.current_path:
+            messagebox.showwarning("Внимание", "Выберите изображение.")
+            return
+        try:
+            self._set_status("Анализ размеров колоний...")
+            self.root.update_idletasks()
+            result = self._process_image(self.current_path, self._get_params())
+            avg_area_px = result.get('avg_colony_area', 0)
+            if avg_area_px <= 0:
+                self._set_status("Не удалось определить размер колоний")
+                return
+            dish = result.get('dish')
+            dish_mm = self.p['dish_diameter_mm'].get()
+            if not dish or dish[2] <= 0 or dish_mm <= 0:
+                self._set_status("Не удалось определить масштаб")
+                return
+            ppm = (2 * dish[2]) / dish_mm
+            avg_r_px = math.sqrt(avg_area_px / math.pi)
+            avg_diam_mm = (avg_r_px * 2) / ppm
+            min_d = max(0.1, min(5.0, round(avg_diam_mm * 0.8, 1)))
+            max_d = max(0.5, min(20.0, round(avg_diam_mm * 1.2, 1)))
+            self.p['min_diam_mm'].set(min_d)
+            self.p['max_diam_mm'].set(max_d)
+            self._set_status(
+                f"Средний диаметр: {avg_diam_mm:.2f} мм \u2192 "
+                f"мин {min_d} мм, макс {max_d} мм (\u00b120%)")
         except Exception as e:
             messagebox.showerror("Ошибка", str(e))
 
