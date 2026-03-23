@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "colony-counter"
+version = "2.1"
+description = "Automatic bacterial colony counter for Petri dishes"
+license = {text = "GPL-3.0"}
+requires-python = ">=3.11"
+dependencies = [
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "openpyxl>=3.1",
+    "scikit-image>=0.22",
+    "matplotlib>=3.8",
+]
+
+[project.scripts]
+colony-counter = "colony_counter.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["colony_counter*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

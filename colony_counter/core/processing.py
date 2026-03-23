@@ -228,9 +228,25 @@ class ImageProcessor:
 
     # ── Per-dish pipeline ────────────────────────────────────────────────
     def _process_single_dish(self, img, gray, cx, cy, r, params):
+        import math
         h, w = img.shape[:2]
         dish_mask = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(dish_mask, (cx, cy), max(1, int(r * C.DISH_MASK_RATIO)), 255, -1)
+
+        # Calibrate min/max area from mm using REAL dish radius
+        dish_mm = params.get('dish_diameter_mm', 90.0)
+        if dish_mm > 0 and r > 0:
+            real_px_per_mm = (2 * r) / dish_mm
+        else:
+            real_px_per_mm = 10.0  # fallback
+        min_diam = params.get('min_diam_mm', 0.3)
+        max_diam = params.get('max_diam_mm', 3.0)
+        if min_diam > 0 and max_diam > 0:
+            min_r_px = min_diam / 2.0 * real_px_per_mm
+            max_r_px = max_diam / 2.0 * real_px_per_mm
+            params = dict(params)  # don't mutate original
+            params['min_area'] = max(1, int(math.pi * min_r_px * min_r_px))
+            params['max_area'] = max(params['min_area'] + 1, int(math.pi * max_r_px * max_r_px))
 
         has_label, label_mask, hidden_est = False, None, 0
         if bool(params.get('detect_label', True)):

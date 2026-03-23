@@ -3,5 +3,11 @@ dist/
 __pycache__/
 *.spec
 *.pyc
+*.pyo
 *.zip
+*.exe
+*.xlsx
+.mypy_cache/
+.pytest_cache/
+*.egg-info/
 Новая папка/

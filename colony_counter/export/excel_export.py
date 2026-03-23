@@ -31,14 +31,15 @@ def export_excel(filepath, rows, version=C.VERSION):
     ws["A2"].font = Font(italic=True, size=9, color="555555")
 
     headers = ["#", "Файл", "Авто", "Искл.", "Ручн.", "ИТОГО",
-               "Одиноч.", "Кластер.", "Ср.площ.", "Путь"]
+               "Одиноч.", "Кластер.", "Ср.площ.px", "Ср.площ.мм\u00b2",
+               "CFU/мл", "Путь"]
     for ci, h in enumerate(headers, 1):
         c = ws.cell(row=4, column=ci, value=h)
         c.fill = hf
         c.font = hfn
         c.alignment = ca
         c.border = brd
-    widths = [4, 28, 10, 10, 10, 12, 14, 12, 16, 50]
+    widths = [4, 28, 10, 10, 10, 12, 14, 12, 14, 14, 14, 50]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -49,7 +50,8 @@ def export_excel(filepath, rows, version=C.VERSION):
         vals = [idx, r['name'], r['auto'],
                 f"-{r['excluded']}" if r['excluded'] else 0,
                 r['manual'], r['total'], r['singles'], r['clusters'],
-                r['avg_area_px'], r['path']]
+                r['avg_area_px'], r['avg_area_mm2'] or "",
+                r['cfu'] or "", r['path']]
         for ci, v in enumerate(vals, 1):
             c = ws.cell(row=row_n, column=ci, value=v)
             c.border = brd
@@ -62,12 +64,12 @@ def export_excel(filepath, rows, version=C.VERSION):
 
     ws.cell(row=row_n, column=2, value="ИТОГО").font = Font(bold=True)
     ws.cell(row=row_n, column=6, value=total_sum).font = Font(bold=True, size=12)
-    for ci in range(1, 11):
+    for ci in range(1, 13):
         c = ws.cell(row=row_n, column=ci)
         c.fill = tf
         c.border = brd
         c.alignment = ca
 
     ws.freeze_panes = "A5"
-    ws.auto_filter.ref = f"A4:J{row_n - 1}"
+    ws.auto_filter.ref = f"A4:L{row_n - 1}"
     wb.save(filepath)

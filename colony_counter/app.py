@@ -390,7 +390,7 @@ class App:
         sp.pack(fill=tk.X, pady=4)
         pr = tk.Frame(sp.body, bg=T.BG1)
         pr.pack(fill=tk.X)
-        for key, label in [('default', 'F1'), ('sensitive', 'F2'), ('strict', 'F3'), ('large', 'F4')]:
+        for key, label in [('default', 'F1 Стд'), ('sensitive', 'F2 Чувст'), ('strict', 'F3 Строг'), ('large', 'F4 Крупн')]:
             DarkButton(pr, label, lambda k=key: self._apply_preset(k), 'ghost', small=True).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
         # Buttons
         DarkButton(parent, "ОБРАБОТАТЬ ТЕКУЩЕЕ", self._process_current, 'primary').pack(fill=tk.X, pady=4)
@@ -548,20 +548,9 @@ class App:
     # ═══════════ PROCESSING ══════════════════════════════════════════════
 
     def _get_params(self):
-        import math
-        p = {k: v.get() for k, v in self.p.items()}
-        # Convert mm diameters to pixel areas using dish calibration.
-        # Estimate: standard 90mm dish ≈ 900px diameter on 2000px image → ~10 px/mm
-        # Actual scale computed inside processor after dish detection,
-        # but we provide a reasonable default here.
-        dish_mm = p.get('dish_diameter_mm', 90.0)
-        # Rough estimate: image max dim is 2000, dish takes ~88% → ~880px radius
-        est_px_per_mm = (2000 * 0.88) / max(dish_mm, 1)
-        min_r_px = p['min_diam_mm'] / 2.0 * est_px_per_mm
-        max_r_px = p['max_diam_mm'] / 2.0 * est_px_per_mm
-        p['min_area'] = max(1, int(math.pi * min_r_px * min_r_px))
-        p['max_area'] = max(p['min_area'] + 1, int(math.pi * max_r_px * max_r_px))
-        return p
+        """Collect all params. mm→px conversion happens inside processor
+        after real dish radius is known (two-pass calibration)."""
+        return {k: v.get() for k, v in self.p.items()}
 
     def _process_image(self, path, params, progress_cb=None):
         """Unified: handles TIFF frames, temp files, cleanup."""
@@ -592,13 +581,16 @@ class App:
 
     def _run_threaded(self, paths):
         self._processing = True
+        # Snapshot all params and overrides BEFORE thread starts (thread safety)
+        frozen_params = self._get_params()
+        frozen_overrides = {p: list(v) for p, v in self.dish_overrides.items()}
 
         def worker():
             n = len(paths)
             for i, path in enumerate(paths):
                 try:
-                    params = self._get_params()
-                    ov = self.dish_overrides.get(path)
+                    params = dict(frozen_params)
+                    ov = frozen_overrides.get(path)
                     if ov:
                         params['dish_overrides'] = ov
                     _path = path
@@ -732,7 +724,7 @@ class App:
         crop = pil.crop((sx0, sy0, sx1, sy1))
         ow = max(1, round((sx1 - sx0) * ds))
         oh = max(1, round((sy1 - sy0) * ds))
-        resized = crop.resize((ow, oh), Image.BILINEAR)
+        resized = crop.resize((ow, oh), Image.Resampling.BILINEAR)
         photo = ImageTk.PhotoImage(resized)
         canvas.delete("all")
         canvas.create_image(round(ox + sx0 * ds), round(oy + sy0 * ds), anchor=tk.NW, image=photo)
@@ -788,7 +780,7 @@ class App:
             iw, ih = pil.size
             fit = min(half_w / iw, ch / ih)
             nw, nh = max(1, int(iw * fit)), max(1, int(ih * fit))
-            resized = pil.resize((nw, nh), Image.BILINEAR)
+            resized = pil.resize((nw, nh), Image.Resampling.BILINEAR)
             photo = ImageTk.PhotoImage(resized)
             ox = x_off + (half_w - nw) // 2
             oy = (ch - nh) // 2
