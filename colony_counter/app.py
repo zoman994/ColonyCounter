@@ -189,20 +189,20 @@ class App:
         self._prog_bar = tk.Frame(pf, bg=T.ACCENT, height=3)
         self._prog_bar.place(x=0, y=0, height=3, relwidth=0)
 
-        # Body
-        body = tk.Frame(self.root, bg=T.BG)
-        body.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-        left = tk.Frame(body, bg=T.BG1, width=210, highlightthickness=1, highlightbackground=T.BORDER)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
-        left.pack_propagate(False)
+        # Body — resizable 3-pane layout
+        paned = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
+                               bg=T.BORDER, sashwidth=5, sashrelief=tk.FLAT,
+                               opaqueresize=True)
+        paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        left = tk.Frame(paned, bg=T.BG1, highlightthickness=1, highlightbackground=T.BORDER)
         self._build_left(left)
-        right = tk.Frame(body, bg=T.BG1, width=270, highlightthickness=1, highlightbackground=T.BORDER)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
-        right.pack_propagate(False)
-        self._build_right(right)
-        center = tk.Frame(body, bg=T.BG)
-        center.pack(fill=tk.BOTH, expand=True)
+        center = tk.Frame(paned, bg=T.BG)
         self._build_center(center)
+        right = tk.Frame(paned, bg=T.BG1, highlightthickness=1, highlightbackground=T.BORDER)
+        self._build_right(right)
+        paned.add(left, minsize=160, width=220)
+        paned.add(center, minsize=400)
+        paned.add(right, minsize=200, width=300)
 
         # Status
         tk.Frame(self.root, bg=T.BORDER, height=1).pack(fill=tk.X)
