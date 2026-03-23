@@ -23,6 +23,7 @@ from colony_counter.core.io_utils import cv_imwrite
 from colony_counter.export import excel_export, csv_export, pdf_export, image_export
 from colony_counter.ui.theme import T, save_theme_pref, load_theme_pref
 from colony_counter.ui.widgets import DarkButton, DarkCheck, DarkSlider, DarkSection
+from colony_counter.ui.logo import LOGO_LIGHT_B64, LOGO_DARK_B64
 
 try:
     from matplotlib.figure import Figure
@@ -155,8 +156,15 @@ class App:
         hdr = tk.Frame(self.root, bg=T.BG, height=40)
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
-        tk.Label(hdr, text="\u25c9", bg=T.BG, fg=T.ACCENT,
-                 font=('Consolas', 16)).pack(side=tk.LEFT, padx=(12, 4))
+        # RES lab logo
+        import base64
+        import io
+        logo_b64 = LOGO_DARK_B64 if T.is_dark() else LOGO_LIGHT_B64
+        logo_data = base64.b64decode(logo_b64)
+        logo_pil = Image.open(io.BytesIO(logo_data))
+        self._logo_photo = ImageTk.PhotoImage(logo_pil)
+        tk.Label(hdr, image=self._logo_photo, bg=T.BG).pack(side=tk.LEFT, padx=(12, 8))
+        # App name + version
         tk.Label(hdr, text="ColonyCounter", bg=T.BG, fg=T.ACCENT,
                  font=T.FONT_TITLE).pack(side=tk.LEFT)
         tk.Label(hdr, text=f"v{C.VERSION}", bg=T.BG, fg=T.FG4,
