@@ -394,14 +394,28 @@ class ImageProcessor:
 
         normalized = self.normalize_background(gray, work_mask)
         clahe = cv2.createCLAHE(clipLimit=C.CLAHE_CLIP, tileGridSize=C.CLAHE_TILE)
-        enhanced = clahe.apply(normalized)
+        enhanced_raw = clahe.apply(normalized)
+
+        # Normalise enhanced to 0-100 scale relative to THIS dish.
+        # Slider 0-100 now means "% of colony-vs-background contrast".
+        # Stable across different dishes/lighting — no need to adjust.
+        work_pixels = enhanced_raw[work_mask > 0]
+        if len(work_pixels) > 0:
+            p_lo = np.percentile(work_pixels, 50)    # median = background
+            p_hi = np.percentile(work_pixels, 99.5)  # bright = colonies
+            denom = max(1.0, p_hi - p_lo)
+            enhanced = np.clip(
+                (enhanced_raw.astype(np.float32) - p_lo) / denom * 100,
+                0, 255).astype(np.uint8)
+        else:
+            enhanced = enhanced_raw
 
         if bool(params.get('use_otsu', False)):
             wp = enhanced[work_mask > 0]
             if len(wp) > 0:
                 ov, _ = cv2.threshold(wp, 0, 255,
                                       cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                thresh_val = max(5, int(ov * C.OTSU_SCALE))
+                thresh_val = max(5, int(ov))  # Otsu on normalised scale — no magic multiplier
             else:
                 thresh_val = int(params['threshold'])
         else:

@@ -686,9 +686,19 @@ class App:
             mask = np.zeros((h, w), np.uint8)
             cv2.circle(mask, (cx, cy), int(r * C.DISH_MASK_RATIO), 255, -1)
             norm = self.processor.normalize_background(gray, mask)
-            enh = cv2.createCLAHE(clipLimit=C.CLAHE_CLIP, tileGridSize=C.CLAHE_TILE).apply(norm)
+            enh_raw = cv2.createCLAHE(clipLimit=C.CLAHE_CLIP, tileGridSize=C.CLAHE_TILE).apply(norm)
+            # Normalise to 0-100 scale (same as processing pipeline)
+            wp = enh_raw[mask > 0]
+            if len(wp) > 0:
+                p_lo = np.percentile(wp, 50)
+                p_hi = np.percentile(wp, 99.5)
+                denom = max(1.0, p_hi - p_lo)
+                enh = np.clip((enh_raw.astype(np.float32) - p_lo) / denom * 100,
+                              0, 255).astype(np.uint8)
+            else:
+                enh = enh_raw
             ov, _ = cv2.threshold(enh, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            s = max(5, int(ov * C.OTSU_SCALE))
+            s = max(5, int(ov))
             self.p['threshold'].set(s)
             self._set_status(f"Otsu: {s}")
         except Exception as e:
